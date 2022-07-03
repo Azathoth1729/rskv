@@ -1,18 +1,34 @@
+use std::process::exit;
+
 use clap::Parser;
+
 use kvs::args::{Commands, KVSArgs};
 use kvs::KvStore;
+use kvs::{get_kvs_data_dir, KvsError, Result};
 
-fn main() {
+fn main() -> Result<()> {
     let cli = KVSArgs::parse();
 
-    let mut store = KvStore::new();
+    let mut store = KvStore::open(get_kvs_data_dir())?;
 
     match &cli.command {
-        Commands::Set { key, value } => store.set(key.clone(), value.clone()),
+        Commands::Set { key, value } => store.set(key.clone(), value.clone())?,
         Commands::Get { key } => {
-            let val = store.get(key.clone()).expect("not found");
-            println!("kv[key]={}", val)
+            if let Some(val) = store.get(key.clone())? {
+                println!("{}", val)
+            } else {
+                println!("Key not found")
+            }
         }
-        Commands::Rm { key } => store.remove(key.clone()),
+        Commands::Rm { key } => match store.remove(key.clone()) {
+            Ok(_) => {}
+            Err(KvsError::KeyNotFound) => {
+                println!("Key not found");
+                exit(1)
+            }
+            Err(e) => return Err(e),
+        },
     }
+
+    Ok(())
 }
