@@ -22,7 +22,7 @@ struct ServerArgs {
 
 arg_enum! {
   /// Engine enum type
-#[derive(Debug, Clone, PartialEq, ArgEnum)]
+#[derive(Debug, Clone, PartialEq)]
 enum Engine {
     Kvs,
     Sled,

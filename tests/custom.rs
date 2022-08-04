@@ -2,6 +2,8 @@
 
 use std::{ffi::OsStr, fs, path::Path};
 
+use tempfile::TempDir;
+
 use rskv::{get_kvstore_data_dir, KvStore, Result};
 
 #[test]
@@ -35,7 +37,9 @@ fn test_sorted_gen_list() -> Result<()> {
 fn test_sled() {
     use sled::IVec;
 
-    let db = sled::open("my_db").unwrap();
+    let temp_dir = TempDir::new().unwrap();
+
+    let db = sled::open(temp_dir.path()).unwrap();
     db.insert(b"yo!", b"v1").unwrap();
     assert_eq!(db.get(b"yo!"), Ok(Some(IVec::from(b"v1"))));
 }
