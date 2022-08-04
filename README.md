@@ -1,4 +1,4 @@
-# kVS
+# kvs
 
 A demo key/value database using rust
 

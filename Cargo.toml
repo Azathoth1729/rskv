@@ -1,19 +1,33 @@
 [package]
-name = "kvs"
+name = "rskv"
 version = "0.1.0"
 authors = ["Azathoth1729 <aa1203528272@gmail.com>"]
 description = "A key-value store for talent plan's TP201 project"
 edition = "2021"
 
+[[bin]]
+name = "kvs-client"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "kvs-server"
+path = "src/bin/server.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+clap = { version = "3", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.9"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+sled = "0.34"
+
+[dev-dependencies]
 assert_cmd = "2.0"
 predicates = "2"
 tempfile = "3.3"
 walkdir = "2.3"
-clap = { version = "3.2.7", features = ["derive"] }
-serde = { version = "1.0.137", features = ["derive"] }
-serde_json = "1.0.81"
-
-thiserror = "1.0"
-anyhow = "1.0"

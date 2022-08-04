@@ -4,9 +4,9 @@ use std::{
     path::Path,
 };
 
-use kvs::Result;
-
 use serde::{Deserialize, Serialize};
+
+use rskv::Result;
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 enum Move {

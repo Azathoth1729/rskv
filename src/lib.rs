@@ -1,19 +1,29 @@
 #![deny(missing_docs)]
 //! A simple key/value store.
 
-mod kv;
+mod client;
+mod engines;
+mod error;
+mod resp;
+mod server;
+
+pub use client::KvsClient;
+pub use engines::{KvStore, KvsEngine, SledKvsEngine};
+pub use error::{KvsError, Result};
+pub use server::KvsServer;
+
 use std::path::PathBuf;
 
-pub use kv::KvStore;
-
-mod error;
-pub use error::{KvsError, Result};
-
-pub mod args;
-
-/// default kvs data directory
-pub fn get_kvs_data_dir() -> PathBuf {
+/// default kvstore data directory
+pub fn get_kvstore_data_dir() -> PathBuf {
     let mut dir = std::env::current_dir().unwrap();
     dir.push("data/kvs");
+    dir
+}
+
+/// default sled engine data directory
+pub fn get_sled_data_dir() -> PathBuf {
+    let mut dir = std::env::current_dir().unwrap();
+    dir.push("data/sled");
     dir
 }
