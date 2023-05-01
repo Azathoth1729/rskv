@@ -1,13 +1,13 @@
 use std::{env::current_dir, fs, net::SocketAddr, process::exit};
 
-use clap::{arg_enum, clap_derive::ArgEnum, Parser};
+use clap::{arg_enum, Parser};
 use log::{error, info, warn, LevelFilter};
 
 use rskv::{
-    get_kvstore_data_dir, get_sled_data_dir, KvStore, KvsEngine, KvsServer, Result, SledKvsEngine,
+    get_kvstore_data_dir, get_sled_data_dir, Bitcask, KvsEngine, KvsServer, Result, SledKvsEngine,
 };
 
-/// Args for kvs-client
+/// Args for kvs-server
 #[derive(Parser)]
 #[clap(author, version, about)]
 #[clap(propagate_version = true)]
@@ -22,11 +22,11 @@ struct ServerArgs {
 
 arg_enum! {
   /// Engine enum type
-#[derive(Debug, Clone, PartialEq)]
-enum Engine {
-    Kvs,
-    Sled,
-}
+  #[derive(Debug, Clone, PartialEq)]
+  enum Engine {
+      Kvs,
+      Sled,
+  }
 }
 
 const DEFAULT_ENGINE: Engine = Engine::Kvs;
@@ -47,7 +47,7 @@ fn main() {
     let res = current_engine().and_then(|cur_engine| {
         if let Some(cur_engine) = cur_engine {
             if engine != cur_engine {
-                error!("Wrong engine!");
+                error!("Wrong engine! Please modify the engine file in the root of project");
                 exit(1);
             }
         }
@@ -65,7 +65,7 @@ fn run(engine: Engine, addr: SocketAddr) -> Result<()> {
     fs::write(current_dir()?.join("engine"), format!("{:?}", engine))?;
 
     match engine {
-        Engine::Kvs => run_with_engine(KvStore::open(get_kvstore_data_dir())?, addr),
+        Engine::Kvs => run_with_engine(Bitcask::open(get_kvstore_data_dir())?, addr),
         Engine::Sled => run_with_engine(SledKvsEngine::new(sled::open(get_sled_data_dir())?), addr),
     }
 }

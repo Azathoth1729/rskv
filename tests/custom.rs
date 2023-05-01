@@ -4,7 +4,7 @@ use std::{ffi::OsStr, fs, path::Path};
 
 use tempfile::TempDir;
 
-use rskv::{get_kvstore_data_dir, KvStore, Result};
+use rskv::{get_kvstore_data_dir, Bitcask, Result};
 
 #[test]
 fn test_sorted_gen_list() -> Result<()> {

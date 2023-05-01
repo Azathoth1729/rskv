@@ -15,7 +15,7 @@ impl SledKvsEngine {
 impl KvsEngine for SledKvsEngine {
     fn set(&mut self, key: String, value: String) -> crate::Result<()> {
         self.0.insert(&key, value.as_bytes())?;
-        self.0.flush()?;
+        // self.0.flush()?;
         Ok(())
     }
 
@@ -27,7 +27,7 @@ impl KvsEngine for SledKvsEngine {
             .transpose()?)
     }
 
-    fn remove(&mut self, key: String) -> crate::Result<()> {
+    fn rm(&mut self, key: String) -> crate::Result<()> {
         self.0.remove(&key)?.ok_or(KvsError::KeyNotFound)?;
         self.0.flush()?;
         Ok(())

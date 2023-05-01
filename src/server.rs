@@ -65,7 +65,7 @@ impl<E: KvsEngine> KvsServer<E> {
                     Ok(()) => SetResponse::Ok(()),
                     Err(e) => SetResponse::Err(e.to_string()),
                 }),
-                Request::Rm { key } => send_resp!(match self.engine.remove(key) {
+                Request::Rm { key } => send_resp!(match self.engine.rm(key) {
                     Ok(()) => RemoveResponse::Ok(()),
                     Err(e) => RemoveResponse::Err(e.to_string()),
                 }),

@@ -8,7 +8,7 @@ mod resp;
 mod server;
 
 pub use client::KvsClient;
-pub use engines::{KvStore, KvsEngine, SledKvsEngine};
+pub use engines::{Bitcask, KvsEngine, SledKvsEngine};
 pub use error::{KvsError, Result};
 pub use server::KvsServer;
 

@@ -1,8 +1,8 @@
 use crate::Result;
 
-mod kvs;
+mod bitcask;
 mod sled;
-pub use self::kvs::KvStore;
+pub use self::bitcask::Bitcask;
 pub use self::sled::SledKvsEngine;
 
 /// Defines the storage interface called by KvsServer
@@ -19,10 +19,10 @@ pub trait KvsEngine {
 
     /// Remove a given key
     ///   
-    /// # Errors
+    /// ## Errors
     ///
     /// It returns `KvsError::KeyNotFound` if the given key is not found.
     ///
     /// It propagates I/O or serialization errors during writing the log.
-    fn remove(&mut self, key: String) -> Result<()>;
+    fn rm(&mut self, key: String) -> Result<()>;
 }
