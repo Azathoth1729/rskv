@@ -51,7 +51,7 @@ fn main() {
                 exit(1);
             }
         }
-        run(engine, addr)
+        boot_engine(engine, addr)
     });
 
     if let Err(e) = res {
@@ -60,7 +60,7 @@ fn main() {
     }
 }
 
-fn run(engine: Engine, addr: SocketAddr) -> Result<()> {
+fn boot_engine(engine: Engine, addr: SocketAddr) -> Result<()> {
     // write engine to engine file
     fs::write(current_dir()?.join("engine"), format!("{:?}", engine))?;
 

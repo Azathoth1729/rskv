@@ -6,11 +6,13 @@ mod engines;
 mod error;
 mod resp;
 mod server;
+pub mod thread_pool;
 
 pub use client::KvsClient;
 pub use engines::{Bitcask, KvsEngine, SledKvsEngine};
 pub use error::{KvsError, Result};
 pub use server::KvsServer;
+
 
 use std::path::PathBuf;
 

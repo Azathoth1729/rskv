@@ -42,6 +42,7 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 /// * `index file` - The on-disk representation of the in-memory index.
 /// Without this the log would need to be completely replayed to restore
 /// the state of the in-memory index each time the database is started.
+
 pub struct Bitcask {
     /// Directory for sotring log data, it contains many log file
     data_path: PathBuf,

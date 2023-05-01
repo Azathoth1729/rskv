@@ -28,7 +28,7 @@ impl<E: KvsEngine> KvsServer<E> {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    if let Err(e) = self.serve(stream) {
+                    if let Err(e) = self.handle_stream(stream) {
                         error!("Error on serving client: {}", e);
                     }
                 }
@@ -38,7 +38,7 @@ impl<E: KvsEngine> KvsServer<E> {
         Ok(())
     }
 
-    fn serve(&mut self, stream: TcpStream) -> Result<()> {
+    fn handle_stream(&mut self, stream: TcpStream) -> Result<()> {
         let peer_addr = stream.peer_addr()?;
         let reader = BufReader::new(&stream);
         let mut writer = BufWriter::new(&stream);
