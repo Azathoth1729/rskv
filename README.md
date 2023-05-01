@@ -1,6 +1,6 @@
 # kvs
 
-一个面向磁盘设计的 KV 数据库, 利用
+一个面向磁盘设计的 KV 数据库, 利用 `Bitcask` 算法持久化储存kv数据.
 
 ## Movitation
 
