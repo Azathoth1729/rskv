@@ -1,12 +1,20 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    cell::RefCell,
+    collections::{hash_map, HashMap},
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::Range,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::SystemTime,
 };
 
+use dashmap::DashMap;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
@@ -42,25 +50,19 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 /// * `index file` - The on-disk representation of the in-memory index.
 /// Without this the log would need to be completely replayed to restore
 /// the state of the in-memory index each time the database is started.
-
+#[derive(Clone)]
 pub struct Bitcask {
-    /// Directory for sotring log data, it contains many log file
-    data_path: PathBuf,
     /// [Bitcask] build caches to quickly find reader belongs to `fid` using `HashMap`.
     ///
     /// This hashmap insert all exsiting log files when [Bitcask]::open is called.
-    readers: HashMap<u64, BufReaderWithPos<File>>,
+    reader: Reader,
     /// Current writer to write `command`s into disk
-    cur_writer: BufWriterWithPos<File>,
-    /// log file id which the current writer write to
-    cur_fid: u64,
+    cur_writer: Arc<Mutex<Writer>>,
+
     /// In-memory Index maps from keys(String) to [CmdPos].
     ///
     /// This is a `B-Tree` which would load `log files` in the disk into memory when [Bitcask]::open is called.
-    index: BTreeMap<String, CmdPos>,
-    /// The number of bytes representing "stale" commands that could be
-    /// deleted during a compaction.
-    uncompacted: u64,
+    index: Arc<DashMap<String, CmdPos>>,
 }
 
 impl Bitcask {
@@ -69,98 +71,58 @@ impl Bitcask {
     /// This will create a new directory to store log files if the given one does not exist.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         // open or create a directory to store log files
-        let path = path.into();
-        fs::create_dir_all(&path)?;
+        let data_path = Arc::new(path.into());
+        fs::create_dir_all(&*data_path)?;
 
         let mut readers = HashMap::new();
-        let mut index = BTreeMap::new();
-        let mut uncompacted = 0;
+        let mut index = Arc::new(DashMap::new());
 
-        let fids = sorted_fids(&path)?;
+        let fids = sorted_fids(&*data_path)?;
+        let mut uncompacted = 0;
 
         // Indexing and building cache of readers
         for &fid in &fids {
-            let mut reader = new_log_reader(&path, fid)?;
-            uncompacted += Self::index(fid, &mut reader, &mut index)?;
+            let mut reader = new_log_reader(&data_path, fid)?;
+            uncompacted += Self::load(fid, &mut reader, &mut index)?;
             readers.insert(fid, reader);
         }
 
         // Create a new log file which fid = (max of fids) + 1
         let cur_fid = *fids.last().unwrap_or(&0) + 1;
-        let cur_writer = new_log_writer(&path, cur_fid)?;
-        readers.insert(cur_fid, new_log_reader(&path, cur_fid)?);
+        let cur_writer = new_log_writer(&data_path, cur_fid)?;
 
-        Ok(Bitcask {
-            data_path: path,
-            readers,
+        let reader = Reader {
+            data_path: Arc::clone(&data_path),
+            safe_point: Arc::new(AtomicU64::new(0)),
+            readers: RefCell::new(readers),
+        };
+
+        let writer = Writer {
+            data_path: Arc::clone(&data_path),
+            reader: reader.clone(),
             cur_writer,
             cur_fid,
-            index,
             uncompacted,
+            index: Arc::clone(&index),
+        };
+
+        Ok(Self {
+            reader,
+            cur_writer: Arc::new(Mutex::new(writer)),
+            index,
         })
     }
 
-    /// Clears stale log files.
-    fn compact(&mut self) -> Result<()> {
-        // increase current gen by 2. current_gen + 1 is for the compaction file.
-        let compaction_fid = self.cur_fid + 1;
-        self.cur_fid += 2;
-        self.cur_writer = self.log_file(self.cur_fid)?;
-
-        let mut compaction_writer = self.log_file(compaction_fid)?;
-
-        // copy all indexed command into `compaction_writer`
-        for cmd_pos in &mut self.index.values_mut() {
-            let reader = self
-                .readers
-                .get_mut(&cmd_pos.fid)
-                .expect("Cannot find log reader");
-            if reader.pos != cmd_pos.pos {
-                reader.seek(SeekFrom::Start(cmd_pos.pos))?;
-            }
-
-            let mut entry_reader = reader.take(cmd_pos.len);
-            let _len = io::copy(&mut entry_reader, &mut compaction_writer)?;
-        }
-        compaction_writer.flush()?;
-
-        // Remove stale log files.
-        let stale_gens: Vec<_> = self
-            .readers
-            .keys()
-            .filter(|&&fid| fid < compaction_fid)
-            .cloned()
-            .collect();
-        for stale_gen in stale_gens {
-            self.readers.remove(&stale_gen);
-            fs::remove_file(log_path(&self.data_path, stale_gen))?;
-        }
-        self.uncompacted = 0;
-        Ok(())
-    }
-
-    /// Create a new log file with given generation number and add the reader to the readers map.
-    ///
-    /// Returns the writer of that log file.
-    fn log_file(&mut self, fid: u64) -> Result<BufWriterWithPos<File>> {
-        let writer = new_log_writer(&self.data_path, fid)?;
-        self.readers
-            .insert(fid, new_log_reader(&self.data_path, fid)?);
-
-        Ok(writer)
-    }
-
-    /// Indexing one log file for index
+    /// Load the whole log file and store value locations in the index map.
     ///
     /// Returns how many bytes can be saved after a compaction.
-    fn index(
+    fn load(
         fid: u64,
         reader: &mut BufReaderWithPos<File>,
-        index: &mut BTreeMap<String, CmdPos>,
+        index: &DashMap<String, CmdPos>,
     ) -> Result<u64> {
         let mut pos = reader.seek(SeekFrom::Start(0))?;
-        let mut uncompacted = 0; // number of bytes that can be saved after a compaction.
-
+        let mut uncompacted = 0;
         // deserialize all `command`s of this log file into a iterator
         let mut stream = Deserializer::from_reader(reader).into_iter::<Cmd>();
 
@@ -169,12 +131,12 @@ impl Bitcask {
             let new_pos = stream.byte_offset() as u64;
             match cmd? {
                 Cmd::Set { key, .. } => {
-                    if let Some(old_cmd) = index.insert(key, (fid, pos..new_pos).into()) {
+                    if let Some(.., old_cmd) = index.insert(key, (fid, pos..new_pos).into()) {
                         uncompacted += old_cmd.len;
                     }
                 }
                 Cmd::Rm { key } => {
-                    if let Some(old_cmd) = index.remove(&key) {
+                    if let Some((.., old_cmd)) = index.remove(&key) {
                         uncompacted += old_cmd.len;
                     }
                     // the "remove" command itself can be deleted in the next compaction.
@@ -193,47 +155,16 @@ impl KvsEngine for Bitcask {
     /// Set the value of a string key to a string
     ///
     /// If the key already exists, the previous value will be overwritten.
-    fn set(&mut self, key: String, value: String) -> Result<()> {
-        let cmd = Cmd::set(key, value);
-        let pos = self.cur_writer.pos;
-
-        serde_json::to_writer(&mut self.cur_writer, &cmd)?;
-        self.cur_writer.flush()?;
-
-        if let Cmd::Set { key, .. } = cmd {
-            self.uncompacted += self
-                .index
-                .insert(key, (self.cur_fid, pos..self.cur_writer.pos).into())
-                .map(|cmd_pos| cmd_pos.len)
-                .unwrap_or(0)
-        }
-
-        if self.uncompacted > COMPACTION_THRESHOLD {
-            self.compact()?;
-        }
-        Ok(())
+    fn set(&self, key: String, value: String) -> Result<()> {
+        self.cur_writer.lock().unwrap().set(key, value)
     }
 
     /// Get the string value of a given string key
     ///
     /// Returns `None` if the given key does not exist.
-    fn get(&mut self, key: String) -> Result<Option<String>> {
+    fn get(&self, key: String) -> Result<Option<String>> {
         if let Some(cmd_pos) = self.index.get(&key) {
-            // get the reader via reader hashmap
-            let reader = self.readers.get_mut(&cmd_pos.fid).expect(&format!(
-                "Unable find the log reader which fidis {}",
-                &cmd_pos.fid
-            ));
-
-            reader.seek(SeekFrom::Start(cmd_pos.pos))?;
-            // cmd_reader read up to cmd_pos.len bytes
-            let cmd_reader = reader.take(cmd_pos.len);
-
-            if let Cmd::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::Unknown)
-            }
+            self.reader.read_command(&cmd_pos)
         } else {
             Ok(None)
         }
@@ -246,15 +177,143 @@ impl KvsEngine for Bitcask {
     /// It returns `KvsError::KeyNotFound` if the given key is not found.
     ///
     /// It propagates I/O or serialization errors during writing the log.
+    fn rm(&self, key: String) -> Result<()> {
+        self.cur_writer.lock().unwrap().rm(key)
+    }
+}
+
+///
+struct Reader {
+    data_path: Arc<PathBuf>,
+    // generation file number of the latest compaction file
+    safe_point: Arc<AtomicU64>,
+    readers: RefCell<HashMap<u64, BufReaderWithPos<File>>>,
+}
+
+impl Reader {
+    /// Close file handles with generation file number less than safe_point.
+    ///
+    /// `safe_point` is updated to the latest compaction gen after a compaction finishes.
+    /// The compaction generation contains the sum of all operations before it and the
+    /// in-memory index contains no entries with generation number less than safe_point.
+    /// So we can safely close those file handles and the stale files can be deleted.
+    fn close_stale_handles(&self) {
+        let mut readers = self.readers.borrow_mut();
+        while !readers.is_empty() {
+            let first_fid = *readers.keys().next().unwrap();
+            if self.safe_point.load(Ordering::SeqCst) <= first_fid {
+                break;
+            }
+            readers.remove(&first_fid);
+        }
+    }
+
+    /// First Call `close_stale_handles`. Then Read the on-disk command and apply `f` to that command
+    fn read_and<F, R>(&self, cmd_pos: &CmdPos, f: F) -> Result<R>
+    where
+        F: FnOnce(io::Take<&mut BufReaderWithPos<File>>) -> Result<R>,
+    {
+        self.close_stale_handles();
+
+        let mut readers = self.readers.borrow_mut();
+
+        // Open the file if we haven't opened it in this `KvStoreReader`.
+        // Using entry API avoid double call hashmap's insert.
+        if let hash_map::Entry::Vacant(entry) = readers.entry(cmd_pos.fid) {
+            let new_reader =
+                BufReaderWithPos::new(File::open(log_path(&self.data_path, cmd_pos.fid))?)?;
+
+            entry.insert(new_reader);
+        }
+
+        // Get the reader via readers hashmap
+        let reader_with_pos = readers.get_mut(&cmd_pos.fid).expect(&format!(
+            "Unable find the log reader which fid: {}",
+            &cmd_pos.fid
+        ));
+
+        reader_with_pos.seek(SeekFrom::Start(cmd_pos.pos))?;
+        // cmd_reader read up to cmd_pos.len bytes
+        let cmd_reader = reader_with_pos.take(cmd_pos.len);
+        f(cmd_reader)
+    }
+
+    // Read the command on the disk and deserialize it to in-memory `Command`.
+    fn read_command(&self, cmd_pos: &CmdPos) -> Result<Option<String>> {
+        self.read_and(cmd_pos, |cmd_reader| {
+            if let Cmd::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
+                Ok(Some(value))
+            } else {
+                Err(KvsError::Unknown)
+            }
+        })
+    }
+}
+
+impl Clone for Reader {
+    fn clone(&self) -> Self {
+        Self {
+            data_path: Arc::clone(&self.data_path),
+            safe_point: Arc::clone(&self.safe_point),
+            readers: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
+///
+struct Writer {
+    data_path: Arc<PathBuf>,
+    reader: Reader,
+    cur_writer: BufWriterWithPos<File>,
+    cur_fid: u64,
+    /// The number of bytes representing "stale" commands that could be
+    /// deleted during a compaction.
+    uncompacted: u64,
+    index: Arc<DashMap<String, CmdPos>>,
+}
+
+impl Writer {
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        let cmd = Cmd::set(key, value);
+        let pos = self.cur_writer.pos;
+        serde_json::to_writer(&mut self.cur_writer, &cmd)?;
+        self.cur_writer.flush()?;
+
+        if let Cmd::Set { key, .. } = cmd {
+            self.uncompacted += self
+                .index
+                .insert(key, (self.cur_fid, pos..self.cur_writer.pos).into())
+                .map(|cmd_pos| cmd_pos.len)
+                .unwrap_or(0)
+        }
+
+        if self.uncompacted > COMPACTION_THRESHOLD {
+            let now = SystemTime::now();
+            info!("Compaction starts");
+            self.compact()?;
+            info!("Compaction finished, cost {:?}", now.elapsed().unwrap());
+        }
+
+        Ok(())
+    }
+
     fn rm(&mut self, key: String) -> Result<()> {
         if self.index.contains_key(&key) {
             let cmd = Cmd::rm(key);
-
+            let pos = self.cur_writer.pos;
             serde_json::to_writer(&mut self.cur_writer, &cmd)?;
             self.cur_writer.flush()?;
 
             if let Cmd::Rm { key } = cmd {
-                self.uncompacted += self.index.remove(&key).expect("key not found").len;
+                self.uncompacted += self
+                    .index
+                    .remove(&key)
+                    .map(|(.., old_cmd_pos)| old_cmd_pos)
+                    .expect("key not found")
+                    .len;
+                // the "remove" command itself can be deleted in the next compaction
+                // so we add its length to `uncompacted`
+                self.uncompacted += self.cur_writer.pos - pos;
             }
 
             if self.uncompacted > COMPACTION_THRESHOLD {
@@ -266,6 +325,104 @@ impl KvsEngine for Bitcask {
             Err(KvsError::KeyNotFound)
         }
     }
+
+    /// Clears stale log files.
+    fn compact(&mut self) -> Result<()> {
+        // increase current fid by 2. current_fid + 1 is for the compaction file.
+        let compaction_fid = self.cur_fid + 1;
+        self.cur_fid += 2;
+        self.cur_writer = new_log_writer(&self.data_path, self.cur_fid)?;
+
+        let mut compaction_writer = new_log_writer(&self.data_path, compaction_fid)?;
+
+        let mut new_pos = 0;
+        // copy all valid commands(from index) into compaction file, be careful about deadlock when iterating dashmap
+        for mut entry in self.index.iter_mut() {
+            let cmd_pos = entry.value_mut();
+            let len = self.reader.read_and(cmd_pos, |mut cmd_reader| {
+                Ok(io::copy(&mut cmd_reader, &mut compaction_writer)?)
+            })?;
+
+            *cmd_pos = CmdPos {
+                fid: compaction_fid,
+                pos: new_pos,
+                len,
+            };
+
+            new_pos += len;
+        }
+        compaction_writer.flush()?;
+
+        // update safe_point
+        self.reader
+            .safe_point
+            .store(compaction_fid, Ordering::SeqCst);
+        self.reader.close_stale_handles();
+
+        // remove stale log files
+        // Note that actually these files are not deleted immediately because `KvStoreReader`s
+        // still keep open file handles. When `KvStoreReader` is used next time, it will clear
+        // its stale file handles. On Unix, the files will be deleted after all the handles
+        // are closed. On Windows, the deletions below will fail and stale files are expected
+        // to be deleted in the next compaction.
+
+        let stale_fids = sorted_fids(&*self.data_path)?
+            .into_iter()
+            .filter(|&fid| fid < compaction_fid);
+
+        for stale_fid in stale_fids {
+            let file_path = log_path(&self.data_path, stale_fid);
+            if let Err(e) = fs::remove_file(&file_path) {
+                error!("{:?} cannot be deleted: {}", file_path, e);
+            }
+        }
+        self.uncompacted = 0;
+
+        Ok(())
+    }
+}
+
+/// Return a sorted list of log file generated by [Bitcask].
+fn sorted_fids(path: impl AsRef<Path>) -> Result<Vec<u64>> {
+    let mut fids: Vec<u64> = fs::read_dir(&path)?
+        .flat_map(|res| -> Result<_> { Ok(res?.path()) })
+        .filter(|path| path.is_file() && path.extension() == Some("log".as_ref()))
+        .flat_map(|path| {
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .map(|s| s.trim_end_matches(".log"))
+                .map(str::parse::<u64>)
+        })
+        .flatten()
+        .collect();
+
+    fids.sort_unstable();
+
+    Ok(fids)
+}
+
+/// join path: {dir}/{fid}.log
+fn log_path(dir: &Path, fid: u64) -> PathBuf {
+    dir.join(format!("{}.log", fid))
+}
+
+/// Create a new [BufReaderWithPos] for `fid`'s log file.
+fn new_log_reader(dir: &Path, fid: u64) -> Result<BufReaderWithPos<File>> {
+    BufReaderWithPos::new(File::open(log_path(&dir, fid))?)
+}
+
+/// Creat a new log file with `fid` and return the writer to the log.
+fn new_log_writer(path: &Path, fid: u64) -> Result<BufWriterWithPos<File>> {
+    let path = log_path(&path, fid);
+    let writer = BufWriterWithPos::new(
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(&path)?,
+    )?;
+
+    Ok(writer)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -371,46 +528,4 @@ impl<W: Write + Seek> Seek for BufWriterWithPos<W> {
         self.pos = self.writer.seek(pos)?;
         Ok(self.pos)
     }
-}
-
-/// Return a sorted list of log file generated by [Bitcask].
-fn sorted_fids(path: impl AsRef<Path>) -> Result<Vec<u64>> {
-    let mut fids: Vec<u64> = fs::read_dir(&path)?
-        .flat_map(|res| -> Result<_> { Ok(res?.path()) })
-        .filter(|path| path.is_file() && path.extension() == Some("log".as_ref()))
-        .flat_map(|path| {
-            path.file_name()
-                .and_then(OsStr::to_str)
-                .map(|s| s.trim_end_matches(".log"))
-                .map(str::parse::<u64>)
-        })
-        .flatten()
-        .collect();
-
-    fids.sort_unstable();
-
-    Ok(fids)
-}
-
-fn log_path(dir: &Path, fid: u64) -> PathBuf {
-    dir.join(format!("{}.log", fid))
-}
-
-/// Create a new [BufReaderWithPos] for `fid`'s log file.
-fn new_log_reader(dir: &Path, fid: u64) -> Result<BufReaderWithPos<File>> {
-    BufReaderWithPos::new(File::open(log_path(&dir, fid))?)
-}
-
-/// Creat a writer representing append new log file
-fn new_log_writer(dir: &Path, fid: u64) -> Result<BufWriterWithPos<File>> {
-    let path = log_path(&dir, fid);
-    let writer = BufWriterWithPos::new(
-        OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(true)
-            .open(&path)?,
-    )?;
-
-    Ok(writer)
 }

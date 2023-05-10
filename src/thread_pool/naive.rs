@@ -55,39 +55,39 @@ fn spawn_in_pool(job: Arc<Mutex<Receiver<Job>>>) {
     });
 }
 
-#[derive(Default)]
-pub struct Builder {
-    num_threads: Option<usize>,
-    thread_name: Option<String>,
-    thread_stack_size: Option<usize>,
-}
+// #[derive(Default)]
+// pub struct Builder {
+//     num_threads: Option<usize>,
+//     thread_name: Option<String>,
+//     thread_stack_size: Option<usize>,
+// }
 
-impl Builder {
-    pub fn new() -> Builder {
-        Builder {
-            num_threads: None,
-            thread_name: None,
-            thread_stack_size: None,
-        }
-    }
+// impl Builder {
+//     pub fn new() -> Builder {
+//         Builder {
+//             num_threads: None,
+//             thread_name: None,
+//             thread_stack_size: None,
+//         }
+//     }
 
-    pub fn num_threads(mut self, num_threads: usize) -> Builder {
-        assert!(num_threads > 0);
-        self.num_threads = Some(num_threads);
-        self
-    }
+//     pub fn num_threads(mut self, num_threads: usize) -> Builder {
+//         assert!(num_threads > 0);
+//         self.num_threads = Some(num_threads);
+//         self
+//     }
 
-    pub fn thread_name(mut self, name: String) -> Builder {
-        self.thread_name = Some(name);
-        self
-    }
+//     pub fn thread_name(mut self, name: String) -> Builder {
+//         self.thread_name = Some(name);
+//         self
+//     }
 
-    pub fn thread_stack_size(mut self, size: usize) -> Builder {
-        self.thread_stack_size = Some(size);
-        self
-    }
+//     pub fn thread_stack_size(mut self, size: usize) -> Builder {
+//         self.thread_stack_size = Some(size);
+//         self
+//     }
 
-    pub fn build(self) -> crate::Result<NaiveThreadPool> {
-        NaiveThreadPool::new(self.num_threads.unwrap())
-    }
-}
+//     pub fn build(self) -> crate::Result<NaiveThreadPool> {
+//         NaiveThreadPool::new(self.num_threads.unwrap())
+//     }
+// }

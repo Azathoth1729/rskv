@@ -28,9 +28,9 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 sled = "0.34"
 num_cpus = "1.0"
-panic-control = "0.1.4"
+dashmap = "5.3"
+
 # concurrency
-crossbeam-utils = "0.8"
 rayon = "1.5.3"
 
 [dev-dependencies]
@@ -38,3 +38,5 @@ assert_cmd = "2.0"
 predicates = "2"
 tempfile = "3.3"
 walkdir = "2.3"
+panic-control = "0.1.4"
+crossbeam-utils = "0.8"

@@ -3,6 +3,7 @@ use sled::Db;
 use crate::{KvsEngine, KvsError};
 
 /// Kvs engine implementation by seld database
+#[derive(Clone)]
 pub struct SledKvsEngine(Db);
 
 impl SledKvsEngine {
@@ -13,13 +14,13 @@ impl SledKvsEngine {
 }
 
 impl KvsEngine for SledKvsEngine {
-    fn set(&mut self, key: String, value: String) -> crate::Result<()> {
+    fn set(&self, key: String, value: String) -> crate::Result<()> {
         self.0.insert(&key, value.as_bytes())?;
         // self.0.flush()?;
         Ok(())
     }
 
-    fn get(&mut self, key: String) -> crate::Result<Option<String>> {
+    fn get(&self, key: String) -> crate::Result<Option<String>> {
         Ok(self
             .0
             .get(&key)?
@@ -27,7 +28,7 @@ impl KvsEngine for SledKvsEngine {
             .transpose()?)
     }
 
-    fn rm(&mut self, key: String) -> crate::Result<()> {
+    fn rm(&self, key: String) -> crate::Result<()> {
         self.0.remove(&key)?.ok_or(KvsError::KeyNotFound)?;
         self.0.flush()?;
         Ok(())

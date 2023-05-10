@@ -1,16 +1,18 @@
 # kvs
 
-一个面向磁盘设计的 KV 数据库, 利用 `Bitcask` 算法持久化储存kv数据.
+一个简单的 KV 数据库, 使用简化版 `Bitcask` 算法持久化储存kv数据.
 
-## Movitation
+## Motivation
 
 To complete the project exercise of [talent-plan's TP201][talent-plan's TP201].
 
 ## Features
 
-- [x] Log-structured File Storage
+- [x] Implement a Bitcask-like engine(a Log-structured File Storage)
 - [x] Client-Server Networking
-- [ ] Concurrency
+- [x] Concurrency: lock-free readers
+- [ ] Asynchronous
+- [ ] Benchmark
 
 ## Useage
 
@@ -42,9 +44,11 @@ OPTIONS:
     -V, --version            Print version information
 ```
 
-## Bitcask
+## 学习心得
 
-`rskv` 默认使用类似 [Bitcask] 的算法来实现储存引擎, 也可以使用其他存储引擎(只需要实现 `KvsEngine` trait).
+### Bitcask(单线程)
+
+`rskv` 默认使用类似 [Bitcask] 的算法来实现储存引擎, 但也可以使用其他存储引擎(只需要实现 `KvsEngine` trait).
 
 `Bitcask` 的数据储存在磁盘的一个目录里面。目录中有多个文件(log file)，其中有旧数据文件和活跃的数据文件，但是同时只有一个活跃的文件用于写入新的数据。
 
@@ -136,3 +140,12 @@ pub struct CmdPos {
 
 [talent-plan's TP201]: https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md
 [Bitcask]: https://riak.com/assets/bitcask-intro.pdf
+
+### Concurrency
+
+`risk` 支持多个线程并发读写磁盘，为了保证并发的高效性，其中写流程是lock-free，而读流程为了保证线程安全因而必须是串行的，就是说在读的时候需要`Mutex`的保护。(写流程并不是真正的并行，因为底层文件读取一定是串行的)
+
+为了加入并发的支持, 我们需要
+
+1. 使用线程池来管理不同tcp链接的读写
+2. 改变 `Bitcask`的结构体定义使其能被多线程共享

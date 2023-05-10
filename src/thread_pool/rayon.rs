@@ -6,7 +6,7 @@ use super::ThreadPool;
 pub struct RayonThreadPool(rayon::ThreadPool);
 
 impl ThreadPool for RayonThreadPool {
-    fn new(num_threads: usize) -> crate::Result<Self>
+     fn new(num_threads: usize) -> crate::Result<Self>
     where
         Self: Sized,
     {

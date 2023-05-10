@@ -4,7 +4,9 @@ use clap::{arg_enum, Parser};
 use log::{error, info, warn, LevelFilter};
 
 use rskv::{
-    get_kvstore_data_dir, get_sled_data_dir, Bitcask, KvsEngine, KvsServer, Result, SledKvsEngine,
+    get_kvstore_data_dir, get_sled_data_dir,
+    thread_pool::{RayonThreadPool, ThreadPool},
+    Bitcask, KvsEngine, KvsServer, Result, SledKvsEngine,
 };
 
 /// Args for kvs-server
@@ -64,14 +66,23 @@ fn boot_engine(engine: Engine, addr: SocketAddr) -> Result<()> {
     // write engine to engine file
     fs::write(current_dir()?.join("engine"), format!("{:?}", engine))?;
 
+    let pool = RayonThreadPool::new(num_cpus::get())?;
     match engine {
-        Engine::Kvs => run_with_engine(Bitcask::open(get_kvstore_data_dir())?, addr),
-        Engine::Sled => run_with_engine(SledKvsEngine::new(sled::open(get_sled_data_dir())?), addr),
+        Engine::Kvs => run_with_engine(Bitcask::open(get_kvstore_data_dir())?, pool, addr),
+        Engine::Sled => run_with_engine(
+            SledKvsEngine::new(sled::open(get_sled_data_dir())?),
+            pool,
+            addr,
+        ),
     }
 }
 
-fn run_with_engine<E: KvsEngine>(engine: E, addr: SocketAddr) -> Result<()> {
-    let server = KvsServer::new(engine);
+fn run_with_engine<E: KvsEngine, P: ThreadPool>(
+    engine: E,
+    pool: P,
+    addr: SocketAddr,
+) -> Result<()> {
+    let server = KvsServer::new(engine, pool);
     server.run(addr)
 }
 
